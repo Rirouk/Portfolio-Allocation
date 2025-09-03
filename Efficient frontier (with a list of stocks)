@@ -1,0 +1,175 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Apr 24 13:07:56 2025
+
+@author: EricLAMBURE
+"""
+
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import scipy.optimize as optimize
+import matplotlib.pyplot as plt
+
+start= pd.to_datetime("2022-02-01")
+end= pd.to_datetime("2025-04-22")
+interval= "1d"
+rf = 0.044
+trading_day = 252
+
+'''Exemple of stock we might be interested in, along with their tickers'''
+stock = ["Microsoft", "Broadcom", "Cisco Systems", "IBM", "General Electric", "RTX Corporation", "Honeywell International", "Airbus SE", "The Boeing Company", "Lockheed Martin Corporation", "Safran SA", "Rolls-Royce Holdings plc", "Northrop Grumman Corporation", "TransDigm Group Incorporated", "General Dynamics Corporation", "Rheinmetall AG", "BAE Systems plc", "Thales S.A.", "Howmet Aerospace Inc.", "L3Harris Technologies, Inc.", "Palo Alto Networks", "Fortinet", "CrowdStrike Holdings, Inc.", "Check Point Software Technologies Ltd.", "Zscaler, Inc.", "Hindustan Aeronautics Limited", "Leonardo S.p.a.", "Dassault Aviation société anonyme", "Kongsberg Gruppen ASA", "Hanwha Aerospace Co., Ltd.", "Bharat Electronics Limited", "Saab AB", "Elbit Systems Ltd.", "Singapore Technologies Engineering Ltd", "MTU Aero Engines AG", "ASELSAN Elektronik Sanayi ve Ticaret Anonim Sirketi", "Mazagon Dock Shipbuilders Limited", "Axon Enterprise, Inc.", "HEICO Corporation", "Bombardier Inc.", "Korea Aerospace Industries, Ltd.", "Leonardo DRS, Inc.", "Hensoldt AG", "Huntington Ingalls Industries, Inc.", "Bharat Dynamics Limited", "Indra Sistemas, S.A.", "Kratos Defense & Security Solutions, Inc.", "AeroVironment, Inc.", "QinetiQ Group plc", "Mercury Systems, Inc.", "VSE Corporation", "NextVision Stabilized Systems Ltd", "V2X, Inc.", "MilDef Group AB", "Sturm, Ruger & Company, Inc.", "DroneShield Ltd", "Avon Protection plc"]
+tickers = ["MSFT", "AVGO", "CSCO", "IBM", "GE", "RTX", "HON", "AIR.PA", "BA", "LMT", "SAF.PA", "RR.L", "NOC", "TDG", "GD", "RHM.F", "BA.L", "HO.PA", "HWM", "LHX", "PANW", "FTNT", "CRWD", "CHKP", "ZS", "HAL.NS", "LDO.MI", "AM.PA", "KOG.OL", "012450.KS", "BEL.NS", "SAAB-B.ST", "ESLT", "S63.SI", "MTX.DE", "ASELS.IS", "MAZDOCK.NS", "AXON", "HEI", "BBD-B.TO", "047810.KS", "DRS", "HAG.F", "HII", "BDL.NS", "IDR.MC", "KTOS", "AVAV", "QQ.L", "MRCY", "VSEC", "NXSN.TA", "VVX", "MILDEF.ST", "RGR", "DRO.AX", "AVON.L"]
+
+#stock = ["Microsoft", "Nvidia", "Novo Nordisk", "TSMC", "ASML", "Brookfield Renewable", "LVMH", "Visa", "Airbus", "Scheinder Electric"]
+#tickers = ["MSFT", "NVDA", "NVO", "TSM", "ASML", "BN.TO", "MC.PA","V", "AIR.PA", "SU.PA"]
+
+n=len(tickers)
+
+weights = np.array([1/n] * n) #equal weights
+
+indice_ref = "^GSPC" #SP500; "^FCHI" #CAC40; "^stoxx50e" #EuroStoxx50;  "ÎXIC" #Nasdaq
+
+#%% Retrieve data
+
+data = (yf.download(tickers=tickers, start=start, end=end, interval=interval)["Close"]).bfill().ffill()
+data.columns = stock
+
+# Benchmark data
+data_ref = (yf.download(tickers=indice_ref, start=start, end=end, interval=interval)["Close"]).reindex(data.index).ffill().bfill()
+
+#%% Functions
+
+def data_basics(daily_prices):
+    dailyR = daily_prices.pct_change().dropna()
+    r = np.prod(1 + dailyR) - 1
+    var = dailyR.var(ddof=0)
+    st_d = np.sqrt(var)
+    cov_m = dailyR.cov()
+    mu_r = dailyR.mean()
+    DB = pd.DataFrame({"Returns": r, "Variance": var, "Standard Deviation": st_d, "Mean return": mu_r})
+    return DB, cov_m
+
+def portfolio_basics(daily_prices, weights):
+    DB, cov_m = data_basics(daily_prices)
+    r = DB["Returns"]
+    r_P = np.sum(weights * r)
+    var_P = weights.T @ cov_m @ weights
+    st_d_P = np.sqrt(var_P)
+    PB = pd.DataFrame({"Portfolio Return": r_P, "Portfolio Variance": var_P, "Portfolio Standard Deviation": st_d_P}, index=[0])
+    return PB
+
+def indicators(daily_prices, weights, benchmark, rf):
+    PB = portfolio_basics(daily_prices, weights)
+    r_P = PB["Portfolio Return"]
+    st_d_P = PB["Portfolio Standard Deviation"]
+    returns_P = (daily_prices.pct_change().dropna() * weights).sum(axis=1)
+    returns_ref = benchmark.pct_change().dropna().iloc[:,0]
+    beta = np.cov(returns_P, returns_ref)[0, 1] /returns_ref.var(ddof=0)
+    sharpe = (r_P - rf) / st_d_P
+    treynor = (r_P - rf) / beta
+    CAPM = rf + beta * ((np.prod(1 + returns_ref) - 1) - rf)
+    IND = pd.DataFrame({"Beta": beta, "Sharpe Ratio": sharpe, "Treynor Ratio": treynor, "CAPM": CAPM}, index=[0])
+    return IND
+
+def negative_sharpe_ratio(weights, daily_prices, rf):
+    PB = portfolio_basics(daily_prices, weights)
+    r_P = PB["Portfolio Return"]
+    st_d_P = PB["Portfolio Standard Deviation"]
+    sharpe = (r_P - rf) / st_d_P
+    return -sharpe
+
+def maximized_sharpe_ratio(weights, daily_prices, rf):
+    PB = portfolio_basics(daily_prices, weights)
+    r_P = PB["Portfolio Return"]
+    st_d_P = PB["Portfolio Standard Deviation"]
+    sharpe = (r_P - rf) / st_d_P
+    return sharpe    
+
+#%%
+
+indivs_computations, covaraiance_matrix = data_basics(data)
+portfolio_computations = portfolio_basics(data, weights)
+portfolio_indicators = indicators(data, weights, data_ref, rf)
+
+
+#%%
+
+constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+bounds = [(0, 1) for _ in range(n)]  # Weights between 0 and 1 (no short strategy)
+
+# Optimization for maximum Sharpe ratio
+
+initial_weights = np.array([1/n] * n)
+result = optimize.minimize(negative_sharpe_ratio, initial_weights, args=(data, rf), method='SLSQP', bounds=bounds, constraints=constraints)
+
+optimal_weights = result.x
+optimal_sharpe_ratio = -result.fun
+
+# Efficient Frontier points calculation
+
+num_points = 50
+asset_mean_returns = data_basics(data)[0]["Returns"].values
+target_returns = np.linspace(asset_mean_returns.min(), asset_mean_returns.max(), num_points)
+efficient_frontier_returns = []
+efficient_frontier_volatilities = []
+
+for target_return in target_returns:
+    constraints_ef = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1},
+                      {'type': 'eq', 'fun': lambda x: np.sum(x * asset_mean_returns) - target_return}) # Using asset returns for constraint
+    result_ef = optimize.minimize(lambda w: portfolio_basics(data, w)["Portfolio Variance"].iloc[0], initial_weights, method='SLSQP', bounds=bounds, constraints=constraints_ef)
+    if result_ef.success: #check if optimization was succesful
+        volatility = np.sqrt(result_ef.fun)
+        efficient_frontier_returns.append(target_return)
+        efficient_frontier_volatilities.append(volatility)
+    else:
+        print(f"Optimization failed for target return: {target_return}")
+
+
+optimal_portfolio_return = portfolio_basics(data, optimal_weights)["Portfolio Return"].iloc[0]
+optimal_portfolio_variance = portfolio_basics(data, optimal_weights)["Portfolio Variance"].iloc[0]
+optimal_portfolio_std_dev = np.sqrt(optimal_portfolio_variance)
+optimal_sharpe_ratio = maximized_sharpe_ratio(optimal_weights, data, rf)
+optimal_negative_sharpe_ratio = -negative_sharpe_ratio(optimal_weights, data, rf)
+
+efficient_frontier_returns = np.array(efficient_frontier_returns)
+efficient_frontier_volatilities = np.array(efficient_frontier_volatilities)
+
+# Portfolio with minimum variance
+
+result_mvp = optimize.minimize(lambda w: portfolio_basics(data, w)["Portfolio Variance"].iloc[0], initial_weights, method='SLSQP', bounds=bounds, constraints=constraints)
+min_variance_weights = result_mvp.x
+min_variance_return = portfolio_basics(data, min_variance_weights)["Portfolio Return"].iloc[0]
+min_variance_volatility = np.sqrt(result_mvp.fun)
+
+
+#%% PLot
+
+plt.figure(figsize=(10, 6))
+plt.scatter(np.sqrt(data_basics(data)[0]["Variance"].values), data_basics(data)[0]["Returns"].values, label='Individual Assets', c='blue', marker='o') #individual assets
+plt.plot(efficient_frontier_volatilities, efficient_frontier_returns, label='Efficient Frontier', c='red', linewidth=2)
+plt.scatter(portfolio_basics(data, weights)["Portfolio Standard Deviation"].iloc[0], portfolio_basics(data, weights)["Portfolio Return"].iloc[0], label='Portfolio P', c='green', marker='^', s=100) # initial portfolio
+plt.scatter(optimal_portfolio_std_dev, optimal_portfolio_return, label='Optimal Portfolio (Max Sharpe)', c='orange', marker='*', s=100)
+plt.scatter(min_variance_volatility, min_variance_return, label='Minimum Variance Portfolio', c='purple', marker='s', s=100)
+
+plt.xlabel('Volatility (Standard Deviation)')
+plt.ylabel('Expected return')
+plt.title('Efficient Frontier')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+#%% Importants Datasets
+
+efficient_frontier_results = pd.DataFrame({'Returns': efficient_frontier_returns, 'Volatility': efficient_frontier_volatilities})
+optimized_portfolios = pd.DataFrame({'Optimal_weights': optimal_weights, 'Min Variance weights': min_variance_weights}, index=stock)
+optimized_portfolios_indicators = pd.DataFrame({'Optimal Return': optimal_portfolio_return, 'Optimal Variance': optimal_portfolio_variance, 'Optimal Standard Deviation': optimal_portfolio_std_dev, 'Optimal Sharpe Ratio': optimal_sharpe_ratio})
+min_variance_portfolio_indicators = pd.DataFrame({'Min Var Return': min_variance_return, 'Min Var Volatility': min_variance_volatility}, index=[0])
+base_portfolio_indicators = pd.concat([portfolio_computations, portfolio_indicators], axis=1)
+
+#%% Save on Excel
+
+export_data = {"Efficient Frontier": efficient_frontier_results, "Optimized Portfolios": optimized_portfolios, "Optimized Portfolio Indicators": optimized_portfolios_indicators, "Min Variance Portfolio Indicators": min_variance_portfolio_indicators, "Base Portfolio Indicators": base_portfolio_indicators}
+with pd.ExcelWriter("Financial_Data.xlsx") as writer:
+    for sheet_name, df in export_data.items():
+        df.to_excel(writer, sheet_name=sheet_name, index=True)
